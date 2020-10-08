@@ -1,86 +1,87 @@
-#!flask/bin/python
-from flask import Flask, jsonify, abort, make_response, request, url_for
+#!flask/bin/python3
+from flask import Flask, request
+from flask_sqlalchemy import SQLAlchemy 
+from flask_marshmallow import Marshmallow 
+from flask_restful import Api, Resource 
+from flask_migrate import Migrate
 
 app = Flask(__name__)
+app.config['SQLALCHEMY_DATABASE_URI'] = "postgresql://vasia:1234@localhost:5432/taskdb"
+db = SQLAlchemy(app)
+migrate = Migrate(app, db)
+ma = Marshmallow(app) 
+api = Api(app)
 
-tasks = [
-    {
-        'id': 1,
-        'title': u'Buy groceries',
-        'description': u'Milk, Cheese, Pizza, Fruit, Tylenol', 
-        'done': False
-    },
-    {
-        'id': 2,
-        'title': u'Learn Python',
-        'description': u'Need to find a good Python tutorial on the web', 
-        'done': False
-    }
-]
+class Post(db.Model):                # this part of anouter manual cos i am lazy ass
+    __tablename__ = 'task'
+    id = db.Column(db.Integer, primary_key=True)
+    title = db.Column(db.String(50))
+    description = db.Column(db.String(255))
+    done = db.Column(db.String(50))
+    
+    def __init__(self, id, title, description,done):
+        self.id = id
+        self.title = title
+        self.description = description
+        self.done = done
+    def __repr__(self):
+        return '<Post %s>' % self.title
 
-@app.route('/todo/api/v1.0/tasks/<int:task_id>', methods=['GET'])
-def get_task(task_id):
-    task = filter(lambda t: t['id'] == task_id, tasks)
-    if len(task) == 0:
-        abort(404)
-    return jsonify({'task': task[0]})
+class PostSchema(ma.Schema):
+    class Meta:
+        fields = ("id", "title", "description", "done")
+        model = Post
+
+post_schema = PostSchema()
+posts_schema = PostSchema(many=True)
+
+class PostListResource(Resource):
+    def get(self):
+        posts = Post.query.all()
+        return posts_schema.dump(posts)
+
+    def post(self):
+        new_post = Post(
+            id=request.json['id'],
+            title=request.json['title'],
+            description=request.json['description'],
+            done=request.json['done']     
+        )
+        db.session.add(new_post)
+        db.session.commit()
+        return post_schema.dump(new_post)
+
+class PostResource(Resource):
+    def get(self, post_id):
+        post = Post.query.get_or_404(post_id)
+        return post_schema.dump(post)
+
+    
+    def patch(self, post_id):
+        post = Post.query.get_or_404(post_id)
+
+        if 'title' in request.json:
+            post.title = request.json['title']
+        if 'description' in request.json:
+            post.description = request.json['description']
+        if 'done' in request.json:
+            post.description = request.json['done']
+
+        db.session.commit()
+        return post_schema.dump(post)
+
+    def delete(self, post_id):
+        post = Post.query.get_or_404(post_id)
+        db.session.delete(post)
+        db.session.commit()
+        return '', 204
+
+api.add_resource(PostListResource, '/tasks')
+api.add_resource(PostResource, '/task/<int:post_id>')
 
 
-@app.errorhandler(404)
-def not_found(error):
-    return make_response(jsonify({'error': 'Not found'}), 404)
 
-@app.route('/todo/api/v1.0/tasks', methods=['POST'])
-def create_task():
-    if not request.json or not 'title' in request.json:
-        abort(400)
-    task = {
-        'id': tasks[-1]['id'] + 1,
-        'title': request.json['title'],
-        'description': request.json.get('description', ""),
-        'done': False
-    }
-    tasks.append(task)
-    return jsonify({'task': task}), 201
-
-@app.route('/todo/api/v1.0/tasks/<int:task_id>', methods=['PUT'])
-def update_task(task_id):
-    task = filter(lambda t: t['id'] == task_id, tasks)
-    if len(task) == 0:
-        abort(404)
-    if not request.json:
-        abort(400)
-    if 'title' in request.json and type(request.json['title']) != unicode:
-        abort(400)
-    if 'description' in request.json and type(request.json['description']) is not unicode:
-        abort(400)
-    if 'done' in request.json and type(request.json['done']) is not bool:
-        abort(400)
-    task[0]['title'] = request.json.get('title', task[0]['title'])
-    task[0]['description'] = request.json.get('description', task[0]['description'])
-    task[0]['done'] = request.json.get('done', task[0]['done'])
-    return jsonify({'task': task[0]})
-
-@app.route('/todo/api/v1.0/tasks/<int:task_id>', methods=['DELETE'])
-def delete_task(task_id):
-    task = filter(lambda t: t['id'] == task_id, tasks)
-    if len(task) == 0:
-        abort(404)
-    tasks.remove(task[0])
-    return jsonify({'result': True})
-
-def make_public_task(task):
-    new_task = {}
-    for field in task:
-        if field == 'id':
-            new_task['uri'] = url_for('get_task', task_id=task['id'], _external=True)
-        else:
-            new_task[field] = task[field]
-    return new_task
-
-@app.route('/todo/api/v1.0/tasks', methods=['GET'])
-def get_tasks():
-    return jsonify({'tasks': map(make_public_task, tasks)})
 
 if __name__ == '__main__':
+    #app.run( debug=True)
     app.run(host='0.0.0.0', debug=True)
